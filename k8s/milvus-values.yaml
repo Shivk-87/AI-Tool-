@@ -1,0 +1,8 @@
+# Example Milvus values for small on-prem deployment
+
+service:
+  type: ClusterIP
+image:
+  tag: 2.2.9
+persistence:
+  enabled: false

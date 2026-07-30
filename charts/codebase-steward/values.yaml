@@ -1,0 +1,49 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/your-org/codebase-steward
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "1"
+    memory: "2Gi"
+
+nodeSelector: {}
+
+tolerations: []
+
+persistence:
+  enabled: false
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+
+milvus:
+  enabled: false
+  host: "milvus.default.svc.cluster.local"
+  port: 19530
+
+modelServing:
+  image: ghcr.io/your-org/llama2-13b-serving:latest
+  gpu:
+    enabled: true
+    requests: 1
+    limits: 1
+  nodeSelector:
+    kubernetes.io/role: gpu
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+secrets:
+  modelCredentialsSecret: ""

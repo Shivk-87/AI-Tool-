@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama2-13b-serving
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llama2-13b-serving
+  template:
+    metadata:
+      labels:
+        app: llama2-13b-serving
+    spec:
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      nodeSelector:
+        kubernetes.io/role: gpu
+      containers:
+        - name: model-server
+          image: ghcr.io/your-org/llama2-13b-serving:latest
+          resources:
+            limits:
+              nvidia.com/gpu: {{ .Values.modelServing.gpu.limits | default 1 }}
+            requests:
+              nvidia.com/gpu: {{ .Values.modelServing.gpu.requests | default 1 }}
+              cpu: "8"
+              memory: "60Gi"
+          env:
+            - name: MODEL_PATH
+              value: "/models/llama2-13b"
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+      volumes:
+        - name: model-storage
+          emptyDir: {}
