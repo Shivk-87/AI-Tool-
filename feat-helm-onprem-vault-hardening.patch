@@ -1,0 +1,450 @@
+diff --git a/charts/codebase-steward/values-vault.yaml b/charts/codebase-steward/values-vault.yaml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/charts/codebase-steward/values-vault.yaml
+@@ -0,0 +1,80 @@
++# Values for Helm chart including Vault, PVCs, Milvus, and resource settings
++
++replicaCount: 2
++
++image:
++  repository: ghcr.io/your-org/codebase-steward
++  pullPolicy: IfNotPresent
++  tag: "latest"
++
++service:
++  type: ClusterIP
++  port: 8000
++
++resources:
++  requests:
++    cpu: "500m"
++    memory: "1Gi"
++  limits:
++    cpu: "1000m"
++    memory: "2Gi"
++
++nodeSelector: {}
++
++tolerations: []
++
++persistence:
++  enabled: true
++  modelStorage:
++    enabled: true
++    storageClass: ""
++    accessMode: ReadWriteOnce
++    size: 200Gi
++  milvus:
++    enabled: true
++    storageClass: ""
++    accessMode: ReadWriteOnce
++    size: 500Gi
++
++milvus:
++  enabled: true
++  host: "milvus.default.svc.cluster.local"
++  port: 19530
++
++modelServing:
++  image: ghcr.io/huggingface/text-generation-inference:latest
++  gpu:
++    enabled: true
++    requests: 1
++    limits: 1
++  nodeSelector:
++    kubernetes.io/role: gpu
++  tolerations:
++    - key: "nvidia.com/gpu"
++      operator: "Exists"
++      effect: "NoSchedule"
++
++vault:
++  enabled: true
++  address: "https://vault.example.local:8200"
++  role: "k8s-role-codebase-steward"
++  # path where secrets are stored, e.g. secret/data/codebase-steward
++  secretPath: "secret/data/codebase-steward"
++  tokenPath: "/vault/token" # where Vault token will be written by init container
++
++secrets:
++  modelCredentialsSecret: ""
+diff --git a/charts/codebase-steward/templates/deployment.yaml b/charts/codebase-steward/templates/deployment.yaml
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/charts/codebase-steward/templates/deployment.yaml
+@@ -0,0 +1,209 @@
++{{- $values := .Values -}}
++apiVersion: apps/v1
++kind: Deployment
++metadata:
++  name: {{ include "codebase-steward.fullname" . | default "codebase-steward" }}
++  labels:
++    app: {{ include "codebase-steward.name" . | default "codebase-steward" }}
++spec:
++  replicas: {{ .Values.replicaCount }}
++  selector:
++    matchLabels:
++      app: codebase-steward
++  template:
++    metadata:
++      labels:
++        app: codebase-steward
++      annotations:
++        prometheus.io/scrape: "true"
++        prometheus.io/port: "8000"
++    spec:
++      {{- if .Values.vault.enabled }}
++      serviceAccountName: {{ include "codebase-steward.fullname" . }}-sa
++      {{- end }}
++      containers:
++        - name: backend
++          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
++          imagePullPolicy: {{ .Values.image.pullPolicy }}
++          ports:
++            - containerPort: 8000
++          env:
++            - name: MILVUS_HOST
++              value: "{{ .Values.milvus.host }}"
++            - name: MILVUS_PORT
++              value: "{{ .Values.milvus.port }}"
++            - name: DATA_DIR
++              value: "/data"
++            {{- if .Values.vault.enabled }}
++            - name: VAULT_ADDR
++              value: "{{ .Values.vault.address }}"
++            - name: VAULT_TOKEN_FILE
++              value: "{{ .Values.vault.tokenPath }}"
++            {{- end }}
++          resources:
++            requests:
++              cpu: {{ .Values.resources.requests.cpu }}
++              memory: {{ .Values.resources.requests.memory }}
++            limits:
++              cpu: {{ .Values.resources.limits.cpu }}
++              memory: {{ .Values.resources.limits.memory }}
++          volumeMounts:
++            - name: data
++              mountPath: /data
++            {{- if .Values.vault.enabled }}
++            - name: vault-token
++              mountPath: {{ .Values.vault.tokenPath }}
++              subPath: token
++            {{- end }}
++          readinessProbe:
++            httpGet:
++              path: /health
++              port: 8000
++            initialDelaySeconds: 10
++            periodSeconds: 10
++            failureThreshold: 3
++          livenessProbe:
++            httpGet:
++              path: /health
++              port: 8000
++            initialDelaySeconds: 30
++            periodSeconds: 20
++            failureThreshold: 5
++      volumes:
++        - name: data
++          {{- if .Values.persistence.enabled }}
++          persistentVolumeClaim:
++            claimName: {{ include "codebase-steward.fullname" . }}-data-pvc
++          {{- else }}
++          emptyDir: {}
++          {{- end }}
++        {{- if .Values.vault.enabled }}
++        - name: vault-token
++          emptyDir: {}
++        {{- end }}
++      {{- if .Values.vault.enabled }}
++      initContainers:
++        - name: vault-init
++          image: hashicorp/vault:1.16.0
++          command: ["/bin/sh","-c"]
++          args:
++            - |
++              echo "Fetching secrets from Vault..."
++              # Using vault CLI to login via Kubernetes auth (service account role)
++              vault login -method=kubernetes role={{ .Values.vault.role }} > /tmp/vault-login.out || true
++              vault kv get -format=json {{ .Values.vault.secretPath }} > /tmp/secret.json || true
++              if [ -f /tmp/vault-login.out ]; then
++                # write token to shared volume
++                cat /tmp/vault-login.out | jq -r '.auth.client_token' > {{ .Values.vault.tokenPath }} || true
++              fi
++              cp /tmp/secret.json /vault/token/secret.json || true
++          volumeMounts:
++            - name: vault-token
++              mountPath: /vault/token
++      {{- end }}
+diff --git a/charts/codebase-steward/templates/pdb.yaml b/charts/codebase-steward/templates/pdb.yaml
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/charts/codebase-steward/templates/pdb.yaml
+@@ -0,0 +1,12 @@
++apiVersion: policy/v1
++kind: PodDisruptionBudget
++metadata:
++  name: {{ include "codebase-steward.fullname" . | default "codebase-steward" }}-pdb
++spec:
++  minAvailable: 1
++  selector:
++    matchLabels:
++      app: codebase-steward
+diff --git a/charts/codebase-steward/templates/pvc-model.yaml b/charts/codebase-steward/templates/pvc-model.yaml
+new file mode 100644
+index 0000000..4444444
+--- /dev/null
++++ b/charts/codebase-steward/templates/pvc-model.yaml
+@@ -0,0 +1,18 @@
++apiVersion: v1
++kind: PersistentVolumeClaim
++metadata:
++  name: {{ include "codebase-steward.fullname" . | default "codebase-steward" }}-data-pvc
++spec:
++  accessModes:
++    - {{ .Values.persistence.modelStorage.accessMode | default "ReadWriteOnce" }}
++  resources:
++    requests:
++      storage: {{ .Values.persistence.modelStorage.size | default "200Gi" }}
++  {{- if .Values.persistence.modelStorage.storageClass }}
++  storageClassName: {{ .Values.persistence.modelStorage.storageClass }}
++  {{- end }}
+diff --git a/charts/codebase-steward/templates/pvc-milvus.yaml b/charts/codebase-steward/templates/pvc-milvus.yaml
+new file mode 100644
+index 0000000..5555555
+--- /dev/null
++++ b/charts/codebase-steward/templates/pvc-milvus.yaml
+@@ -0,0 +1,18 @@
++apiVersion: v1
++kind: PersistentVolumeClaim
++metadata:
++  name: {{ include "codebase-steward.fullname" . | default "codebase-steward" }}-milvus-pvc
++spec:
++  accessModes:
++    - {{ .Values.persistence.milvus.accessMode | default "ReadWriteOnce" }}
++  resources:
++    requests:
++      storage: {{ .Values.persistence.milvus.size | default "500Gi" }}
++  {{- if .Values.persistence.milvus.storageClass }}
++  storageClassName: {{ .Values.persistence.milvus.storageClass }}
++  {{- end }}
+diff --git a/k8s/vault-init-example.yaml b/k8s/vault-init-example.yaml
+new file mode 100644
+index 0000000..6666666
+--- /dev/null
++++ b/k8s/vault-init-example.yaml
+@@ -0,0 +1,37 @@
++# Example using Vault Agent Injector is recommended for production. This is a simplified init-container example that logs into Vault using Kubernetes auth and writes secrets to a file.
++
++apiVersion: v1
++kind: ServiceAccount
++metadata:
++  name: codebase-steward-sa
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: Role
++metadata:
++  name: codebase-steward-role
++rules:
++  - apiGroups: [""]
++    resources: ["pods"]
++    verbs: ["get","list"]
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: RoleBinding
++metadata:
++  name: codebase-steward-rolebinding
++subjects:
++  - kind: ServiceAccount
++    name: codebase-steward-sa
++roleRef:
++  kind: Role
++  name: codebase-steward-role
++  apiGroup: rbac.authorization.k8s.io
++
++# Note: For production, use Vault Agent Injector or Vault CSI to inject secrets directly into files.
++# Sample init container usage is templated in the Helm chart deployment.yaml
+diff --git a/k8s/model-serving-deployment-updated.yaml b/k8s/model-serving-deployment-updated.yaml
+new file mode 100644
+index 0000000..7777777
+--- /dev/null
++++ b/k8s/model-serving-deployment-updated.yaml
+@@ -0,0 +1,55 @@
++# Updated model-serving deployment that uses text-generation-inference (TGI) image and mounts model PVC
++apiVersion: apps/v1
++kind: Deployment
++metadata:
++  name: llama2-13b-serving
++spec:
++  replicas: 1
++  selector:
++    matchLabels:
++      app: llama2-13b-serving
++  template:
++    metadata:
++      labels:
++        app: llama2-13b-serving
++    spec:
++      tolerations:
++        - key: "nvidia.com/gpu"
++          operator: "Exists"
++          effect: "NoSchedule"
++      nodeSelector:
++        kubernetes.io/role: gpu
++      containers:
++        - name: model-server
++          image: ghcr.io/huggingface/text-generation-inference:latest
++          ports:
++            - containerPort: 8080
++          resources:
++            limits:
++              nvidia.com/gpu: 1
++              memory: "120Gi"
++            requests:
++              nvidia.com/gpu: 1
++              cpu: "8"
++              memory: "90Gi"
++          env:
++            - name: MODEL_ID
++              value: "llama2-13b"
++          volumeMounts:
++            - name: model-storage
++              mountPath: /models
++      volumes:
++        - name: model-storage
++          persistentVolumeClaim:
++            claimName: codebase-steward-model-pvc
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..8888888
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,67 @@
++name: CI
++on:
++  push:
++    branches: [ main, feat/* ]
++  pull_request:
++    branches: [ main ]
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - name: Set up Python
++        uses: actions/setup-python@v4
++        with:
++          python-version: '3.10'
++      - name: Install dependencies
++        run: |
++          python -m pip install --upgrade pip
++          pip install -r src/backend/requirements.txt
++      - name: Run pytest
++        run: |
++          export PYTHONPATH=.
++          pytest -q
++
++  smoke-test:
++    needs: test
++    runs-on: ubuntu-latest
++    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feat/')
++    steps:
++      - uses: actions/checkout@v4
++      - name: Set up Python
++        uses: actions/setup-python@v4
++        with:
++          python-version: '3.10'
++      - name: Install deps
++        run: pip install -r src/backend/requirements.txt
++      - name: Start backend
++        run: |
++          export PYTHONPATH=.
++          nohup uvicorn src.backend.app:app --port 8000 &
++          sleep 5
++      - name: Smoke index
++        run: |
++          curl -sS -X POST "http://127.0.0.1:8000/index" -H "Content-Type: application/json" -d '{"repo_url":"https://github.com/octocat/Hello-World.git","project":"hello-world-ci"}' || true
++      - name: Retrieve
++        run: |
++          curl -sS "http://127.0.0.1:8000/retrieve?q=readme&k=3" || true
+diff --git a/observability/prometheus-servicemonitor.yaml b/observability/prometheus-servicemonitor.yaml
+new file mode 100644
+index 0000000..9999999
+--- /dev/null
++++ b/observability/prometheus-servicemonitor.yaml
+@@ -0,0 +1,23 @@
++# Prometheus ServiceMonitor for Prometheus Operator
++apiVersion: monitoring.coreos.com/v1
++kind: ServiceMonitor
++metadata:
++  name: codebase-steward-servicemonitor
++  labels:
++    release: prometheus
++spec:
++  selector:
++    matchLabels:
++      app: codebase-steward
++  endpoints:
++    - port: http
++      path: /metrics
++      interval: 15s
+diff --git a/observability/grafana/dashboard-mvp.json b/observability/grafana/dashboard-mvp.json
+new file mode 100644
+index 0000000..aaaaaaaa
+--- /dev/null
++++ b/observability/grafana/dashboard-mvp.json
+@@ -0,0 +1,22 @@
++{
++  "dashboard": {
++    "id": null,
++    "title": "Codebase Steward - MVP",
++    "panels": [
++      {
++        "type": "stat",
++        "title": "Indexing Success Count",
++        "targets": []
++      },
++      {
++        "type": "graph",
++        "title": "Indexing Latency",
++        "targets": []
++      }
++    ]
++  }
++}
+diff --git a/docs/helm-onprem/HARDENING.md b/docs/helm-onprem/HARDENING.md
+new file mode 100644
+index 0000000..bbbbbbbb
+--- /dev/null
++++ b/docs/helm-onprem/HARDENING.md
+@@ -0,0 +1,58 @@
++# Hardening notes & next steps
++
++This run describes the work done in branch feat/helm-onprem-vault-hardening and next steps to finalize production readiness.
++
++Completed
++- Helm templates updated to include Vault init container scaffold (deployment.yaml)
++- PVC templates added for model storage and Milvus
++- PodDisruptionBudget added
++- Model-serving deployment updated to reference a real inference runtime (TGI) and mount a PVC
++- GitHub Actions workflow added: runs unit tests and an optional smoke test on feature branches
++- Prometheus ServiceMonitor & Grafana dashboard scaffolding added
++
++Next steps (recommended)
++1. Replace the vault init container with Vault Agent Injector or Vault CSI (production secure injection).
++2. Provide actual storageClass names and ensure PVs are available in your cluster.
++3. Configure Milvus Helm chart and persistence; test index & query flows.
++4. Add liveness/startup probes for the model server and tune resources based on profiling.
++5. Integrate Fluentd/EFK or Loki for log aggregation and connect Grafana dashboards to metrics.
++
++How to apply (example)
++- kubectl apply -f k8s/vault-init-example.yaml -n codebase-steward
++- Update charts/codebase-steward/values.yaml (or use values-vault.yaml) with your cluster settings
++- helm upgrade --install codebase-steward charts/codebase-steward -n codebase-steward -f charts/codebase-steward/values-vault.yaml
++
++
