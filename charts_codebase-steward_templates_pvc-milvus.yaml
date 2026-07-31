@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "codebase-steward.fullname" . | default "codebase-steward" }}-milvus-pvc
+spec:
+  accessModes:
+    - {{ .Values.persistence.milvus.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.milvus.size | default "500Gi" }}
+  {{- if .Values.persistence.milvus.storageClass }}
+  storageClassName: {{ .Values.persistence.milvus.storageClass }}
+  {{- end }}

@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "codebase-steward.fullname" . | default "codebase-steward" }}-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: codebase-steward
