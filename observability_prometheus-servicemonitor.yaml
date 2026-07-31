@@ -1,0 +1,15 @@
+# Prometheus ServiceMonitor for Prometheus Operator
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: codebase-steward-servicemonitor
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: codebase-steward
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

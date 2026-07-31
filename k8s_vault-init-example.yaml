@@ -1,0 +1,30 @@
+# Example using Vault Agent Injector is recommended for production. This is a simplified init-container example that logs into Vault using Kubernetes auth and writes secrets to a file.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: codebase-steward-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: codebase-steward-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get","list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: codebase-steward-rolebinding
+subjects:
+  - kind: ServiceAccount
+    name: codebase-steward-sa
+roleRef:
+  kind: Role
+  name: codebase-steward-role
+  apiGroup: rbac.authorization.k8s.io
+
+# Note: For production, use Vault Agent Injector or Vault CSI to inject secrets directly into files.
+# Sample init container usage is templated in the Helm chart deployment.yaml

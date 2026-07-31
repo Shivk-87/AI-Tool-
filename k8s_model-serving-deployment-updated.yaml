@@ -1,0 +1,44 @@
+# Updated model-serving deployment that uses text-generation-inference (TGI) image and mounts model PVC
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama2-13b-serving
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llama2-13b-serving
+  template:
+    metadata:
+      labels:
+        app: llama2-13b-serving
+    spec:
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      nodeSelector:
+        kubernetes.io/role: gpu
+      containers:
+        - name: model-server
+          image: ghcr.io/huggingface/text-generation-inference:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              memory: "120Gi"
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "8"
+              memory: "90Gi"
+          env:
+            - name: MODEL_ID
+              value: "llama2-13b"
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: codebase-steward-model-pvc

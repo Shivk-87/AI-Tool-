@@ -1,0 +1,91 @@
+{{- $values := .Values -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "codebase-steward.fullname" . | default "codebase-steward" }}
+  labels:
+    app: {{ include "codebase-steward.name" . | default "codebase-steward" }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: codebase-steward
+  template:
+    metadata:
+      labels:
+        app: codebase-steward
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        {{- if .Values.vault.enabled }}
+        # Vault Agent Injector annotations — inject secrets as files into the pod
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "{{ .Values.vault.role }}"
+        # Inject the secret at the given path into a file named "credentials"
+        vault.hashicorp.com/agent-inject-secret-credentials: "{{ .Values.vault.secretPath }}"
+        # The injector will render the secret into /vault/secrets/credentials by default
+        {{- end }}
+    spec:
+      {{- if .Values.vault.enabled }}
+      serviceAccountName: {{ include "codebase-steward.fullname" . }}-sa
+      {{- end }}
+      containers:
+        - name: backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MILVUS_HOST
+              value: "{{ .Values.milvus.host }}"
+            - name: MILVUS_PORT
+              value: "{{ .Values.milvus.port }}"
+            - name: DATA_DIR
+              value: "/data"
+            {{- if .Values.vault.enabled }}
+            - name: VAULT_ADDR
+              value: "{{ .Values.vault.address }}"
+            - name: VAULT_SECRET_FILE
+              value: "/vault/secrets/credentials"
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            {{- if .Values.vault.enabled }}
+            - name: vault-secrets
+              mountPath: /vault/secrets
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 5
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "codebase-steward.fullname" . }}-data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.vault.enabled }}
+        - name: vault-secrets
+          emptyDir: {}
+        {{- end }}
+      {{- /* Use Vault Agent Injector in production instead of initContainers for security — see HARDENING.md */}}

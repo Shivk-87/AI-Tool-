@@ -1,0 +1,18 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Codebase Steward - MVP",
+    "panels": [
+      {
+        "type": "stat",
+        "title": "Indexing Success Count",
+        "targets": []
+      },
+      {
+        "type": "graph",
+        "title": "Indexing Latency",
+        "targets": []
+      }
+    ]
+  }
+}

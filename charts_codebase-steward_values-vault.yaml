@@ -1,0 +1,66 @@
+# Values for Helm chart including Vault, PVCs, Milvus, and resource settings
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/your-org/codebase-steward
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+
+nodeSelector: {}
+
+tolerations: []
+
+persistence:
+  enabled: true
+  modelStorage:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 200Gi
+  milvus:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 500Gi
+
+milvus:
+  enabled: true
+  host: "milvus.default.svc.cluster.local"
+  port: 19530
+
+modelServing:
+  image: ghcr.io/huggingface/text-generation-inference:latest
+  gpu:
+    enabled: true
+    requests: 1
+    limits: 1
+  nodeSelector:
+    kubernetes.io/role: gpu
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+vault:
+  enabled: true
+  address: "https://vault.example.local:8200"
+  role: "k8s-role-codebase-steward"
+  # path where secrets are stored, e.g. secret/data/codebase-steward
+  secretPath: "secret/data/codebase-steward"
+  tokenPath: "/vault/token" # where Vault token will be written by init container
+
+secrets:
+  modelCredentialsSecret: ""
