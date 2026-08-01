@@ -57,14 +57,12 @@ class MilvusVectorStore:
     def create_collection_if_not_exists(self):
         """Create collection schema for code embeddings."""
         try:
-            # Check if collection exists
             from pymilvus import utility
             if utility.has_collection(self.collection_name):
                 self.collection = Collection(self.collection_name)
                 logger.info(f"Collection {self.collection_name} already exists")
                 return
             
-            # Define schema
             fields = [
                 FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=256, is_primary=True),
                 FieldSchema(name="repo_id", dtype=DataType.VARCHAR, max_length=256),
@@ -80,7 +78,6 @@ class MilvusVectorStore:
             schema = CollectionSchema(fields=fields, description="Code snippet embeddings")
             self.collection = Collection(self.collection_name, schema=schema)
             
-            # Create index on embedding field
             self.collection.create_index(
                 field_name="embedding",
                 index_params={"metric_type": "L2", "index_type": "IVF_FLAT", "params": {"nlist": 128}}
@@ -97,7 +94,6 @@ class MilvusVectorStore:
             if not self.collection:
                 raise RuntimeError("Collection not initialized")
             
-            # Prepare data in column-oriented format
             ids = []
             repo_ids = []
             file_paths = []
@@ -124,7 +120,7 @@ class MilvusVectorStore:
                 class_names, start_lines, end_lines, embeddings
             ]
             
-            insert_result = self.collection.insert(entities)
+            self.collection.insert(entities)
             self.collection.flush()
             
             logger.info(f"Inserted {len(data)} embeddings into Milvus")
@@ -139,16 +135,11 @@ class MilvusVectorStore:
             if not self.collection:
                 raise RuntimeError("Collection not initialized")
             
-            # Load collection into memory for search
             self.collection.load()
             
-            # Build search parameters
             search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
-            
-            # Build filter expression if repo_id provided
             expr = f'repo_id == "{repo_id}"' if repo_id else None
             
-            # Perform search
             results = self.collection.search(
                 [embedding],
                 "embedding",
@@ -158,7 +149,6 @@ class MilvusVectorStore:
                 output_fields=["id", "repo_id", "file_path", "language", "function_name", "class_name", "start_line", "end_line"]
             )
             
-            # Format results
             hits = []
             for hit in results[0]:
                 hits.append({
@@ -177,9 +167,22 @@ class MilvusVectorStore:
         except Exception as e:
             logger.error(f"Failed to search embeddings: {e}")
             raise
+    
+    def delete_by_repo(self, repo_id: str):
+        """Delete all embeddings for a repository."""
+        try:
+            if not self.collection:
+                raise RuntimeError("Collection not initialized")
+            
+            expr = f'repo_id == "{repo_id}"'
+            self.collection.delete(expr)
+            self.collection.flush()
+            logger.info(f"Deleted embeddings for repo {repo_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete embeddings: {e}")
+            raise
 
 
-# Initialize vector store
 milvus_store = MilvusVectorStore()
 
 
@@ -187,11 +190,9 @@ def init_db():
     """Initialize database connections and create tables."""
     from models import Base
     
-    # Create PostgreSQL tables
     Base.metadata.create_all(bind=engine)
     logger.info("Created/verified PostgreSQL tables")
     
-    # Initialize Milvus
     milvus_store.connect()
     milvus_store.create_collection_if_not_exists()
     logger.info("Initialized Milvus vector store")
