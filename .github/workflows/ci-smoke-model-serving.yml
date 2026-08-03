@@ -1,0 +1,65 @@
+yml
+name: CI - Model Serving Smoke Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  build-and-smoke-test:
+    name: Build image and run smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build model-serving image
+        run: |
+          docker build --file src/model-serving/Dockerfile --tag model-serving:ci .
+
+      - name: Run model-serving container
+        run: |
+          docker run -d --name model-serving -p 8001:8001 model-serving:ci
+
+      - name: Install jq (for parsing JSON in smoke tests)
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Wait for /health to be ready
+        run: |
+          echo "Waiting for model server to be ready..."
+          for i in {1..30}; do
+            if curl -sSf http://localhost:8001/health >/dev/null; then
+              echo "Model server is ready"
+              break
+            fi
+            echo "waiting... ($i)"
+            sleep 2
+          done
+          curl -sSf http://localhost:8001/health || (echo "Health check failed" && docker logs model-serving && exit 1)
+
+      - name: Smoke test /generate endpoint
+        run: |
+          response=$(curl -sS -X POST http://localhost:8001/generate -H "Content-Type: application/json" -d '{"prompt":"security issue: sql injection","max_tokens":10}')
+          echo "Generate response: $response"
+          echo "$response" | jq -e '.generated_text' >/dev/null || (echo "/generate did not return generated_text" && docker logs model-serving && exit 1)
+
+      - name: Smoke test /embeddings endpoint (single)
+        run: |
+          response=$(curl -sS -X POST http://localhost:8001/embeddings -H "Content-Type: application/json" -d '{"text":"hello"}')
+          echo "Embeddings response: $response"
+          echo "$response" | jq -e '.embedding' >/dev/null || (echo "/embeddings did not return embedding" && docker logs model-serving && exit 1)
+
+      - name: Stop container
+        if: always()
+        run: |
+          docker stop model-serving || true
+          docker rm model-serving || true
