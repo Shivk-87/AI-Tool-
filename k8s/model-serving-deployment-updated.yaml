@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-serving
+  labels:
+    app: model-serving
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-serving
+  template:
+    metadata:
+      labels:
+        app: model-serving
+    spec:
+      # Optional: schedule on GPU node(s) by adding nodeSelector or tolerations
+      # nodeSelector:
+      #   kubernetes.io/gpu: "true"
+      containers:
+        - name: model-server
+          # Replace this image with your built model-server image (registry + tag)
+          image: ghcr.io/Shivk-87/model-serving:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8001
+              name: http
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              # For GPU workloads, set the appropriate device plugin resource (example):
+              # nvidia.com/gpu: "1"
+          env:
+            - name: MODEL_PATH
+              value: "/models"
+            - name: MODEL_SERVER_PORT
+              value: "8001"
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 5
+      initContainers:
+        - name: pull-model-artifacts
+          image: curlimages/curl:7.88.1
+          # This init container is a minimal example: it will attempt to download a single
+          # archive or file pointed to by the MODEL_STORE_URL environment variable.
+          # In production, replace with a more robust image/command (aws-cli, gsutil, or a custom model-puller)
+          command:
+            - sh
+            - -c
+            - |
+              if [ -n "$MODEL_STORE_URL" ]; then
+                echo "MODEL_STORE_URL set, attempting fetch..."
+                mkdir -p /models
+                # Attempt to download to /models/model.bin (idempotent)
+                curl -fSL "$MODEL_STORE_URL" -o /models/model.bin || (echo "failed to fetch model from $MODEL_STORE_URL" && exit 1)
+              else
+                echo "MODEL_STORE_URL not set, skipping fetch"
+              fi
+          env:
+            - name: MODEL_STORE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: model-store-secret
+                  key: url
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          emptyDir: {}
