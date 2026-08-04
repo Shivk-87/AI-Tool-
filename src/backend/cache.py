@@ -2,20 +2,21 @@
 import json
 import logging
 from typing import Any, Optional
-import aioredis
+import redis.asyncio as redis
 from config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-redis_client: Optional[aioredis.Redis] = None
+redis_client: Optional[redis.Redis] = None
 
 
 async def init_redis():
     """Initialize Redis connection."""
     global redis_client
     try:
-        redis_client = await aioredis.from_url(settings.REDIS_URL)
+        # decode_responses=True ensures strings are returned instead of bytes
+        redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
         logger.info("Connected to Redis")
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
@@ -24,8 +25,16 @@ async def init_redis():
 
 async def close_redis():
     """Close Redis connection."""
+    global redis_client
     if redis_client:
-        await redis_client.close()
+        try:
+            await redis_client.close()
+            try:
+                await redis_client.connection_pool.disconnect()
+            except Exception:
+                pass
+        finally:
+            redis_client = None
         logger.info("Closed Redis connection")
 
 
@@ -87,12 +96,12 @@ async def delete_cache(key: str):
 
 
 async def clear_cache_pattern(pattern: str):
-    """Delete all keys matching a pattern."""
+    """Delete all keys matching a pattern safely using SCAN."""
     if not redis_client:
         return
     
     try:
-        keys = await redis_client.keys(pattern)
+        keys = [key async for key in redis_client.scan_iter(match=pattern)]
         if keys:
             await redis_client.delete(*keys)
             logger.info(f"Cleared {len(keys)} cache entries for pattern {pattern}")
@@ -110,69 +119,3 @@ def cache_key_for_retrieve(query: str, repo_id: Optional[str] = None) -> str:
 def cache_key_for_suggestion(snippet_id: str, issue_type: str) -> str:
     """Generate cache key for suggestion endpoint."""
     return f"suggestion:{snippet_id}:{issue_type}"
-*** Begin Patch
-*** Update File: src/backend/cache.py
-@@
--"""Redis caching layer."""
--import json
--import logging
--from typing import Any, Optional
--import aioredis
--from config import get_settings
-+"""Redis caching layer."""
-+import json
-+import logging
-+from typing import Any, Optional
-+import redis.asyncio as redis
-+from config import get_settings
-@@
--logger = logging.getLogger(__name__)
--settings = get_settings()
--
--redis_client: Optional[aioredis.Redis] = None
-+logger = logging.getLogger(__name__)
-+settings = get_settings()
-+
-+redis_client: Optional[redis.Redis] = None
-@@
--async def init_redis():
--    """Initialize Redis connection."""
--    global redis_client
--    try:
--        redis_client = await aioredis.from_url(settings.REDIS_URL)
--        logger.info("Connected to Redis")
--    except Exception as e:
--        logger.error(f"Failed to connect to Redis: {e}")
--        raise
-+async def init_redis():
-+    """Initialize Redis connection."""
-+    global redis_client
-+    try:
-+        # redis.asyncio.from_url returns an asyncio-capable Redis client instance.
-+        # No await is required here; network ops happen on first command/await.
-+        redis_client = redis.from_url(settings.REDIS_URL)
-+        logger.info("Connected to Redis")
-+    except Exception as e:
-+        logger.error(f"Failed to connect to Redis: {e}")
-+        raise
-@@
- async def close_redis():
-     """Close Redis connection."""
-     global redis_client
-     if redis_client:
--        await redis_client.close()
--        logger.info("Closed Redis connection")
-+        try:
-+            # Close the client and ensure connections are cleaned up.
-+            await redis_client.close()
-+            # Optionally disconnect the connection pool if present.
-+            try:
-+                await redis_client.connection_pool.disconnect()
-+            except Exception:
-+                # Some Redis client versions may not require or support this; ignore errors.
-+                pass
-+        finally:
-+            # Assign None so the global is actually written in this scope (avoids F824).
-+            redis_client = None
-+        logger.info("Closed Redis connection")
-*** End Patch
