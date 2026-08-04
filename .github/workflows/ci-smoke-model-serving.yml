@@ -1,4 +1,3 @@
-yml
 name: CI - Model Serving Smoke Test
 
 on:
