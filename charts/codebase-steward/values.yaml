@@ -44,6 +44,22 @@ modelServing:
     - key: "nvidia.com/gpu"
       operator: "Exists"
       effect: "NoSchedule"
+modelServing:
+  image: ghcr.io/your-org/llama2-13b-serving:latest
+  port: 8001
+  servicePort: 8001
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  nodeSelector: {}
+  tolerations: []
 
+# Secret that holds model-store URL under key `url` (used by initContainer)
+secrets:
+  modelCredentialsSecret: model-store-secret
 secrets:
   modelCredentialsSecret: ""
