@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "codebase-steward.fullname" . }}-model-serving
+  labels:
+    app: {{ include "codebase-steward.name" . }}-model-serving
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "codebase-steward.name" . }}-model-serving
+  template:
+    metadata:
+      labels:
+        app: {{ include "codebase-steward.name" . }}-model-serving
+    spec:
+      containers:
+        - name: model-serving
+          image: "{{ .Values.modelServing.image }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.modelServing.port | default 8001 }}
+              name: http
+          env:
+            - name: MODEL_PATH
+              value: "/models"
+          resources:
+            requests:
+              cpu: {{ .Values.modelServing.resources.requests.cpu | default "500m" }}
+              memory: {{ .Values.modelServing.resources.requests.memory | default "1Gi" }}
+            limits:
+              cpu: {{ .Values.modelServing.resources.limits.cpu | default "2" }}
+              memory: {{ .Values.modelServing.resources.limits.memory | default "4Gi" }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.modelServing.port | default 8001 }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.modelServing.port | default 8001 }}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 5
+      initContainers:
+        - name: pull-model-artifacts
+          image: curlimages/curl:7.88.1
+          command:
+            - sh
+            - -c
+            - |
+              if [ -n "$MODEL_STORE_URL" ]; then
+                echo "Fetching model from $MODEL_STORE_URL"
+                mkdir -p /models
+                curl -fSL "$MODEL_STORE_URL" -o /models/model.bin || (echo "failed to fetch model" && exit 1)
+              else
+                echo "MODEL_STORE_URL not set, skipping"
+              fi
+          env:
+            - name: MODEL_STORE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default "model-store-secret" .Values.secrets.modelCredentialsSecret }}
+                  key: url
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "codebase-steward.fullname" . }}-data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
