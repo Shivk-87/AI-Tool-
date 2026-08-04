@@ -11,28 +11,47 @@ settings = get_settings()
 redis_client: Optional[redis.Redis] = None
 
 
-async def init_redis():
+async def init_redis() -> None:
     """Initialize Redis connection."""
     global redis_client
     try:
         # decode_responses=True ensures strings are returned instead of bytes
         redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        # verify the connection by pinging the server
+        try:
+            await redis_client.ping()
+        except Exception:
+            # If ping fails, try to close the client and raise so caller knows init failed
+            try:
+                await redis_client.close()
+            except Exception:
+                pass
+            raise
+
         logger.info("Connected to Redis")
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
         raise
 
 
-async def close_redis():
+async def close_redis() -> None:
     """Close Redis connection."""
     global redis_client
     if redis_client:
         try:
-            await redis_client.close()
             try:
-                await redis_client.connection_pool.disconnect()
+                await redis_client.close()
             except Exception:
+                # Some clients may raise on close; continue to try to disconnect pool
                 pass
+
+            # connection_pool.disconnect() is synchronous; call without await
+            pool = getattr(redis_client, "connection_pool", None)
+            if pool:
+                try:
+                    pool.disconnect()
+                except Exception:
+                    pass
         finally:
             redis_client = None
         logger.info("Closed Redis connection")
@@ -61,7 +80,7 @@ async def get_cache(key: str) -> Optional[Any]:
     return None
 
 
-async def set_cache(key: str, value: Any, ttl: int = None):
+async def set_cache(key: str, value: Any, ttl: Optional[int] = None) -> None:
     """
     Store value in cache.
     
@@ -84,7 +103,7 @@ async def set_cache(key: str, value: Any, ttl: int = None):
         logger.warning(f"Cache set error for key {key}: {e}")
 
 
-async def delete_cache(key: str):
+async def delete_cache(key: str) -> None:
     """Delete value from cache."""
     if not redis_client:
         return
@@ -95,7 +114,7 @@ async def delete_cache(key: str):
         logger.warning(f"Cache delete error for key {key}: {e}")
 
 
-async def clear_cache_pattern(pattern: str):
+async def clear_cache_pattern(pattern: str) -> None:
     """Delete all keys matching a pattern safely using SCAN."""
     if not redis_client:
         return
