@@ -33,7 +33,12 @@ milvus:
   port: 19530
 
 modelServing:
+  enabled: true
+  replicaCount: 1
   image: ghcr.io/your-org/llama2-13b-serving:latest
+  port: 8001
+  pullPolicy: IfNotPresent
+  modelPath: "/models"
   gpu:
     enabled: true
     requests: 1
@@ -44,22 +49,30 @@ modelServing:
     - key: "nvidia.com/gpu"
       operator: "Exists"
       effect: "NoSchedule"
-modelServing:
-  image: ghcr.io/your-org/llama2-13b-serving:latest
-  port: 8001
-  servicePort: 8001
+
+  # Model store / init container configuration
+  modelStore:
+    enabled: false
+    # Secret that contains the 'url' key with the model artifact location (e.g., S3 presigned URL or http URL)
+    secretName: model-store-secret
+    # Init container image used to fetch the model (replace with awscli/gsutil for your store)
+    initImage: curlimages/curl:7.88.1
+
+  # PVC configuration for storing model artifacts
+  pvc:
+    enabled: false
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 50Gi
+
+  # Resource settings for model server
   resources:
     requests:
       cpu: "500m"
       memory: "1Gi"
     limits:
       cpu: "2"
-      memory: "4Gi"
-  nodeSelector: {}
-  tolerations: []
+      memory: "8Gi"
 
-# Secret that holds model-store URL under key `url` (used by initContainer)
-secrets:
-  modelCredentialsSecret: model-store-secret
 secrets:
   modelCredentialsSecret: ""

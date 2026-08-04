@@ -1,0 +1,15 @@
+{{- if .Values.modelServing.pvc.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "codebase-steward.fullname" . }}-model-serving-pvc
+spec:
+  accessModes:
+    - {{ .Values.modelServing.pvc.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.modelServing.pvc.size }}
+  {{- if .Values.modelServing.pvc.storageClass }}
+  storageClassName: "{{ .Values.modelServing.pvc.storageClass }}"
+  {{- end }}
+{{- end }}

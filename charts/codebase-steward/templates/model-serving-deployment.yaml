@@ -3,79 +3,87 @@ kind: Deployment
 metadata:
   name: {{ include "codebase-steward.fullname" . }}-model-serving
   labels:
-    app: {{ include "codebase-steward.name" . }}-model-serving
+    app: {{ include "codebase-steward.name" . | default "codebase-steward" }}-model-serving
 spec:
-  replicas: 1
+  replicas: {{ .Values.modelServing.replicaCount }}
   selector:
     matchLabels:
-      app: {{ include "codebase-steward.name" . }}-model-serving
+      app: {{ include "codebase-steward.fullname" . }}-model-serving
   template:
     metadata:
       labels:
-        app: {{ include "codebase-steward.name" . }}-model-serving
+        app: {{ include "codebase-steward.fullname" . }}-model-serving
     spec:
+      {{- if .Values.modelServing.nodeSelector }}
+      nodeSelector: {{ toYaml .Values.modelServing.nodeSelector | nindent 6 }}
+      {{- end }}
+      {{- if .Values.modelServing.tolerations }}
+      tolerations: {{ toYaml .Values.modelServing.tolerations | nindent 6 }}
+      {{- end }}
       containers:
-        - name: model-serving
+        - name: model-server
           image: "{{ .Values.modelServing.image }}"
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.modelServing.pullPolicy | default "IfNotPresent" }}
           ports:
-            - containerPort: {{ .Values.modelServing.port | default 8001 }}
+            - containerPort: {{ .Values.modelServing.port }}
               name: http
           env:
             - name: MODEL_PATH
-              value: "/models"
+              value: "{{ .Values.modelServing.modelPath }}"
           resources:
             requests:
-              cpu: {{ .Values.modelServing.resources.requests.cpu | default "500m" }}
-              memory: {{ .Values.modelServing.resources.requests.memory | default "1Gi" }}
+              cpu: {{ .Values.modelServing.resources.requests.cpu }}
+              memory: {{ .Values.modelServing.resources.requests.memory }}
             limits:
-              cpu: {{ .Values.modelServing.resources.limits.cpu | default "2" }}
-              memory: {{ .Values.modelServing.resources.limits.memory | default "4Gi" }}
+              cpu: {{ .Values.modelServing.resources.limits.cpu }}
+              memory: {{ .Values.modelServing.resources.limits.memory }}
           volumeMounts:
             - name: models
-              mountPath: /models
+              mountPath: {{ .Values.modelServing.modelPath }}
           readinessProbe:
             httpGet:
               path: /health
-              port: {{ .Values.modelServing.port | default 8001 }}
+              port: {{ .Values.modelServing.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
-              port: {{ .Values.modelServing.port | default 8001 }}
+              port: {{ .Values.modelServing.port }}
             initialDelaySeconds: 15
             periodSeconds: 20
             failureThreshold: 5
+      {{- if .Values.modelServing.modelStore.enabled }}
       initContainers:
         - name: pull-model-artifacts
-          image: curlimages/curl:7.88.1
+          image: {{ .Values.modelServing.modelStore.initImage }}
           command:
             - sh
             - -c
             - |
               if [ -n "$MODEL_STORE_URL" ]; then
-                echo "Fetching model from $MODEL_STORE_URL"
-                mkdir -p /models
-                curl -fSL "$MODEL_STORE_URL" -o /models/model.bin || (echo "failed to fetch model" && exit 1)
+                echo "MODEL_STORE_URL set, attempting fetch..."
+                mkdir -p {{ .Values.modelServing.modelPath }}
+                curl -fSL "$MODEL_STORE_URL" -o {{ .Values.modelServing.modelPath }}/model.bin || (echo "failed to fetch model from $MODEL_STORE_URL" && exit 1)
               else
-                echo "MODEL_STORE_URL not set, skipping"
+                echo "MODEL_STORE_URL not set, skipping fetch"
               fi
           env:
             - name: MODEL_STORE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ default "model-store-secret" .Values.secrets.modelCredentialsSecret }}
+                  name: {{ .Values.modelServing.modelStore.secretName }}
                   key: url
           volumeMounts:
             - name: models
-              mountPath: /models
+              mountPath: {{ .Values.modelServing.modelPath }}
+      {{- end }}
       volumes:
         - name: models
-          {{- if .Values.persistence.enabled }}
+          {{- if .Values.modelServing.pvc.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "codebase-steward.fullname" . }}-data-pvc
+            claimName: {{ include "codebase-steward.fullname" . }}-model-serving-pvc
           {{- else }}
           emptyDir: {}
           {{- end }}
