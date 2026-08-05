@@ -68,6 +68,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Build image (if Dockerfile exists)
         id: build_image
         run: |
@@ -86,7 +88,6 @@ jobs:
           name: backend-image
           path: image.tar
       - name: Publish to GHCR
-        if: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_TOKEN != '' }}
         env:
           IMAGE_TAG: ${{ steps.build_image.outputs.IMAGE_TAG }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
