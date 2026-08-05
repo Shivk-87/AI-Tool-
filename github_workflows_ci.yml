@@ -69,14 +69,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image (if Dockerfile exists)
+        id: build_image
         run: |
           if [ -f Dockerfile ]; then
             echo "Dockerfile found — building image"
-            docker build -t ai-tool:${GITHUB_SHA} .
-            docker save ai-tool:${GITHUB_SHA} -o image.tar
+            docker build -t ghcr.io/${{ github.repository_owner }}/ai-tool:${{ github.sha }} .
+            docker save ghcr.io/${{ github.repository_owner }}/ai-tool:${{ github.sha }} -o image.tar
+            echo "IMAGE_TAG=ghcr.io/${{ github.repository_owner }}/ai-tool:${{ github.sha }}" >> $GITHUB_OUTPUT
           else
             echo "No Dockerfile found, skipping image build"
-            # create empty placeholder so upload-artifact step doesn't fail
             touch image.tar
           fi
       - name: Upload image artifact
@@ -84,3 +85,17 @@ jobs:
         with:
           name: backend-image
           path: image.tar
+      - name: Publish to GHCR
+        if: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_TOKEN != '' }}
+        env:
+          IMAGE_TAG: ${{ steps.build_image.outputs.IMAGE_TAG }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          if [ -z "$IMAGE_TAG" ]; then
+            echo "No image to publish"
+            exit 0
+          fi
+          echo "Logging into GHCR"
+          echo $GHCR_TOKEN | docker login ghcr.io -u $GHCR_USERNAME --password-stdin
+          docker push $IMAGE_TAG
