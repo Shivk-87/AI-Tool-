@@ -14,6 +14,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/src/backend/requirements.txt') }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -39,10 +44,58 @@ jobs:
         run: |
           export PYTHONPATH=.
           nohup uvicorn src.backend.app:app --port 8000 &
-          sleep 5
-      - name: Smoke index
+          # wait up to 30s for readiness
+          for i in $(seq 1 30); do
+            if curl -sSf http://127.0.0.1:8000/health >/dev/null; then
+              echo "backend ready"
+              break
+            fi
+            sleep 1
+          done
+      - name: Smoke index (retry)
         run: |
-          curl -sS -X POST "http://127.0.0.1:8000/index" -H "Content-Type: application/json" -d '{"repo_url":"https://github.com/octocat/Hello-World.git","project":"hello-world-ci"}' || true
-      - name: Retrieve
+          for i in $(seq 1 5); do
+            curl -sS -X POST "http://127.0.0.1:8000/index" -H "Content-Type: application/json" -d '{"repo_url":"https://github.com/octocat/Hello-World.git","project":"hello-world-ci"}' && break || sleep 2
+          done
+      - name: Retrieve (retry)
         run: |
-          curl -sS "http://127.0.0.1:8000/retrieve?q=readme&k=3" || true
+          for i in $(seq 1 5); do
+            curl -sS "http://127.0.0.1:8000/retrieve?q=readme&k=3" && break || sleep 2
+          done
+
+  build-image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (if Dockerfile exists)
+        id: build_image
+        run: |
+          if [ -f Dockerfile ]; then
+            echo "Dockerfile found — building image"
+            docker build -t ghcr.io/${{ github.repository_owner }}/ai-tool:${{ github.sha }} .
+            docker save ghcr.io/${{ github.repository_owner }}/ai-tool:${{ github.sha }} -o image.tar
+            echo "IMAGE_TAG=ghcr.io/${{ github.repository_owner }}/ai-tool:${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "No Dockerfile found, skipping image build"
+            touch image.tar
+          fi
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image
+          path: image.tar
+      - name: Publish to GHCR
+        if: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_TOKEN != '' }}
+        env:
+          IMAGE_TAG: ${{ steps.build_image.outputs.IMAGE_TAG }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          if [ -z "$IMAGE_TAG" ]; then
+            echo "No image to publish"
+            exit 0
+          fi
+          echo "Logging into GHCR"
+          echo $GHCR_TOKEN | docker login ghcr.io -u $GHCR_USERNAME --password-stdin
+          docker push $IMAGE_TAG
